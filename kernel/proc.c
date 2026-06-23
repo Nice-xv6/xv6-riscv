@@ -140,6 +140,9 @@ found:
     return 0;
   }
 
+  // Set default nice value to medium priority.
+  p->nice = 10;
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -417,7 +420,7 @@ kwait(uint64 addr)
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
 // Scheduler never returns.  It loops, doing:
-//  - choose a process to run.
+//  - choose a process to run (the RUNNABLE process with the lowest nice value).
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
@@ -438,23 +441,46 @@ scheduler(void)
     intr_off();
 
     int found = 0;
+    struct proc *chosen = 0;
+
+    // Scan all processes and select the RUNNABLE one with the
+    // minimum nice value (0 = highest priority, 20 = lowest).
+    // To avoid deadlocks we only hold one process lock at a time:
+    // release the previous candidate's lock before acquiring the next.
     for (p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if (p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
+        if (chosen == 0 || p->nice < chosen->nice) {
+          // This process is strictly better (lower nice).
+          // Release the old candidate's lock.
+          if (chosen)
+            release(&chosen->lock);
+          chosen = p;
+          // Keep chosen->lock held.
+        } else {
+          // Not better; release immediately.
+          release(&p->lock);
+        }
+      } else {
+        release(&p->lock);
       }
-      release(&p->lock);
     }
+
+    if (chosen) {
+      // Switch to chosen process.  It is the process's job
+      // to release its lock and then reacquire it
+      // before jumping back to us.
+      chosen->state = RUNNING;
+      c->proc = chosen;
+      swtch(&c->context, &chosen->context);
+
+      // Process is done running for now.
+      // It should have changed its p->state before coming back.
+      c->proc = 0;
+      found = 1;
+      release(&chosen->lock);
+    }
+
     if (found == 0) {
       // nothing to run; stop running on this core until an interrupt.
       asm volatile("wfi");
@@ -687,6 +713,7 @@ procdump(void)
     else
       state = "???";
     printk("%d %s %s", p->pid, state, p->name);
+    printk(" nice=%d", p->nice);
     printk("\n");
   }
 }

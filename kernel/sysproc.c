@@ -107,3 +107,24 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+// Set the calling process's nice value.
+// Accepts values 0 (highest priority) to 20 (lowest).
+// Returns the old nice value on success, -1 on error.
+uint64
+sys_nice(void)
+{
+  int n;
+
+  argint(0, &n);
+  if (n < 0 || n > 20)
+    return -1;
+
+  struct proc *p = myproc();
+  acquire(&p->lock);
+  int old = p->nice;
+  p->nice = n;
+  release(&p->lock);
+
+  return old;
+}
