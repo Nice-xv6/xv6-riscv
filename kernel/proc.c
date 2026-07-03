@@ -424,11 +424,19 @@ kwait(uint64 addr)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
+
+// Priority round-robin scheduling:
+// If multiple processes have the same nice value,
+// they are scheduled in a round-robin fashion.
+// This is achieved by keeping track of the last
+// scheduled process and starting the search for the
+// next process from that point in the process table.
 void
 scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
+  static int last_proc_idx = 0;  // Track the last scheduled process index
 
   c->proc = 0;
   for (;;) {
@@ -442,12 +450,17 @@ scheduler(void)
 
     int found = 0;
     struct proc *chosen = 0;
+    int chosen_idx = -1;
 
     // Scan all processes and select the RUNNABLE one with the
     // minimum nice value (0 = highest priority, 20 = lowest).
+    // Use round-robin: start search from after the last scheduled process.
     // To avoid deadlocks we only hold one process lock at a time:
     // release the previous candidate's lock before acquiring the next.
-    for (p = proc; p < &proc[NPROC]; p++) {
+    for (int i = 0; i < NPROC; i++) {
+      int idx = (last_proc_idx + 1 + i) % NPROC;
+      p = &proc[idx];
+      
       acquire(&p->lock);
       if (p->state == RUNNABLE) {
         if (chosen == 0 || p->nice < chosen->nice) {
@@ -456,6 +469,16 @@ scheduler(void)
           if (chosen)
             release(&chosen->lock);
           chosen = p;
+          chosen_idx = idx;
+          // Keep chosen->lock held.
+        } else if (p->nice == chosen->nice && chosen_idx < idx) {
+          // Same nice value: use round-robin by preferring the one
+          // that comes later in the circular search (fairer distribution).
+          // Release the old candidate's lock.
+          if (chosen)
+            release(&chosen->lock);
+          chosen = p;
+          chosen_idx = idx;
           // Keep chosen->lock held.
         } else {
           // Not better; release immediately.
@@ -472,6 +495,7 @@ scheduler(void)
       // before jumping back to us.
       chosen->state = RUNNING;
       c->proc = chosen;
+      last_proc_idx = chosen_idx;  // Update last scheduled process
       swtch(&c->context, &chosen->context);
 
       // Process is done running for now.
