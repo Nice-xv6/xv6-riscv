@@ -43,13 +43,13 @@ main(void)
             // Count how many iterations we complete
             for (long j = 0; j < ITERATIONS; j++) {
                 x += j;
-                if (j % 10000000 == 0) iterations++;
+                if ((j + 1) % 10000000 == 0) iterations++;
             }
             
             // Send progress report
             char msg[2];
             msg[0] = '0' + i;
-            msg[1] = iterations % 10;  // number of 10M iterations done
+            msg[1] = iterations;  // number of 10M chunks completed
             write(pipes[i][1], msg, 2);
             close(pipes[i][1]);
             
@@ -63,8 +63,8 @@ main(void)
     int chunks[3];
     for (int i = 0; i < 3; i++) {
         read(pipes[i][0], buf, 2);
-        chunks[i] = buf[1];
-        printf("  Process %c finished: %d chunks\n", buf[0], buf[1]);
+        chunks[i] = (unsigned char)buf[1];
+        printf("  Process %c finished: %d chunks\n", buf[0], chunks[i]);
         close(pipes[i][0]);
     }
     
