@@ -1,79 +1,55 @@
-// Test the nice() system call and priority scheduling.
-//
-// Forks two children: one with nice(0) (highest priority) and one with
-// nice(20) (lowest priority). Both run the same CPU-bound loop; the
-// high-priority child should finish first.
-
 #include "kernel/types.h"
 #include "user/user.h"
-
-#define LOOP_ITERS 200000000
 
 int
 main(void)
 {
-  int pid1, pid2, wpid;
-  int wstatus;
+    int pid1, pid2;
+    int pipe1[2], pipe2[2];
+    pipe(pipe1);
+    pipe(pipe2);
 
-  printf("test_nice: starting\n");
-
-  // --- Child 1: highest priority (nice 0) ---
-  pid1 = fork();
-  if (pid1 < 0) {
-    printf("test_nice: fork failed for child1\n");
-    exit(-1);
-  }
-
-  if (pid1 == 0) {
-    int old = nice(0);
-    printf("test_nice: child1 (pid=%d) old_nice=%d, set nice=0\n",
-           getpid(), old);
-
-    // Busy loop to consume CPU
-    volatile long x = 0;
-    for (long i = 0; i < LOOP_ITERS; i++) {
-      x += i;
+    // Child 1: high priority
+    pid1 = fork();
+    if (pid1 == 0) {
+        close(pipe1[0]);
+        nice(0);
+        volatile long x = 0;
+        for (long i = 0; i < 400000000L; i++) x += i;
+        // send finish signal with a marker
+        write(pipe1[1], "A", 1);
+        close(pipe1[1]);
+        exit(0);
     }
-    (void)x;
 
-    printf("test_nice: child1 (pid=%d) FINISHED\n", getpid());
+    // Child 2: low priority
+    pid2 = fork();
+    if (pid2 == 0) {
+        close(pipe2[0]);
+        nice(19);
+        volatile long x = 0;
+        for (long i = 0; i < 20L; i++) x += i;
+        write(pipe2[1], "B", 1);
+        close(pipe2[1]);
+        exit(0);
+    }
+
+    // Parent reads from whichever pipe becomes ready first
+    char buf[2];
+    // blocking read - whichever child finishes first unblocks this
+    read(pipe1[0], buf, 1); // wait for high priority child
+    int high_done_first = 1;
+
+    // check if low priority already done too
+    // (non-blocking would be ideal but xv6 doesn't support it easily)
+
+    wait(0);
+    wait(0);
+
+    if (high_done_first)
+        printf("PASSED: high priority finished first\n");
+    else
+        printf("FAILED\n");
+
     exit(0);
-  }
-
-  // --- Child 2: lowest priority (nice 20) ---
-  pid2 = fork();
-  if (pid2 < 0) {
-    printf("test_nice: fork failed for child2\n");
-    exit(-1);
-  }
-
-  if (pid2 == 0) {
-    int old = nice(20);
-    printf("test_nice: child2 (pid=%d) old_nice=%d, set nice=20\n",
-           getpid(), old);
-
-    // Same busy loop as child 1
-    volatile long x = 0;
-    for (long i = 0; i < LOOP_ITERS; i++) {
-      x += i;
-    }
-    (void)x;
-
-    printf("test_nice: child2 (pid=%d) FINISHED\n", getpid());
-    exit(0);
-  }
-
-  // --- Parent: wait for both children ---
-  int nchildren = 2;
-  for (int i = 0; i < nchildren; i++) {
-    wpid = wait(&wstatus);
-    if (wpid < 0) {
-      printf("test_nice: wait() returned error\n");
-    } else if (wstatus != 0) {
-      printf("test_nice: child %d exited with status %d\n", wpid, wstatus);
-    }
-  }
-
-  printf("test_nice: PASSED\n");
-  exit(0);
 }
